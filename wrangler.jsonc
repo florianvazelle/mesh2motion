@@ -5,6 +5,10 @@
       "directory": "./dist"
     },
     "main": "src/survey-worker.js",
+    "durable_objects": {
+      "bindings": [{ "name": "BRIDGE", "class_name": "BridgeSession" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BridgeSession"] }],
     "d1_databases": [
       {
         "binding": "DB",

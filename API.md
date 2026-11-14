@@ -100,6 +100,27 @@ const rigs = await fetch('https://app.mesh2motion.org/api/rigs').then(r => r.jso
 ```
 
 
+## MCP server
+
+The same data is available to AI assistants as an [MCP](https://modelcontextprotocol.io) server at `POST /mcp` (stateless Streamable HTTP, no auth). It has three tools that wrap the endpoints above: `list_rigs`, `get_rig` and `list_variations` (both take `rig_id`).
+
+    claude mcp add --transport http mesh2motion https://app.mesh2motion.org/mcp
+
+The code is in `src/api/McpRoutes.ts`. A new API endpoint becomes an MCP tool by adding an entry to its `TOOLS` list.
+
+### Driving the app (browser tools)
+
+The app can also be driven by an assistant: your own model (load, position, skeleton, bind, animations), your own rigged model (retarget) and Remix (composer). The actions run in a Mesh2Motion tab you keep open, which the worker reaches through a Durable Object (`src/api/BridgeSession.ts`).
+
+1. Open `https://app.mesh2motion.org/create.html?mcp`. A dialog shows a command with a fresh secret code.
+2. Run it: `claude mcp add --transport http mesh2motion https://app.mesh2motion.org/mcp/<code>`
+3. Ask the assistant to start with `get_state`. `open_page` switches between `create`, `retarget` and `composer`.
+
+The tool list is in `src/api/BridgeTools.ts`; the handlers are in `src/lib/bridge/` (shared helpers and the create page) and next to the retarget and composer pages. They click the same buttons a user would, so the app's own checks apply. Files are downloaded by the browser (the tool returns the file name). Anyone holding the code can control the tab, so keep the URL private.
+
+Not covered: moving single bones and painting weights by hand (the automatic weights are used), and arm extension (A-pose) for animations.
+
+
 ## How it works
 
 Mesh2Motion is deployed as a Cloudflare Worker with static assets (see `wrangler.jsonc`):
