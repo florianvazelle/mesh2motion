@@ -8,6 +8,9 @@ import { RetargetAnimationListing } from './RetargetAnimationListing.ts'
 import { AnimationRetargetService } from './AnimationRetargetService'
 import { type SkeletonType } from '../lib/enums/SkeletonType.ts'
 import { RetargetUtils } from './RetargetUtils.ts'
+import { AppBridge } from '../lib/bridge/AppBridge.ts'
+import { animation_list_handlers, choose, click, el, file_from_args, put_file, wait_until } from '../lib/bridge/BridgeDom.ts'
+import { RigConfig } from '../lib/RigConfig.ts'
 
 class RetargetModule {
   private readonly mesh2motion_engine: Mesh2MotionEngine
@@ -51,6 +54,47 @@ class RetargetModule {
     this.step_load_target_model.begin()
     this.step_bone_mapping.begin()
     this.retarget_animation_preview.begin()
+    AppBridge.start('retarget', this.bridge_handlers())
+  }
+
+  // tools for an AI assistant driving this page (see AppBridge)
+  private bridge_handlers (): Record<string, (args: Record<string, any>) => unknown> { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const in_listing = (): boolean => el('#skinned-step-animation-export-options').style.display === 'inline'
+    const mapping_state = (): Record<string, unknown> => ({
+      has_source_rig: this.step_bone_mapping.has_source_skeleton(),
+      has_target_model: this.step_bone_mapping.has_target_skeleton(),
+      mapped: this.step_bone_mapping.has_bone_mappings() || this.is_source_and_target_rig_identical()
+    })
+
+    return {
+      get_state: () => ({ page: 'retarget', step: in_listing() ? 'animations' : 'bone-mapping', ...mapping_state() }),
+
+      retarget_set_source_rig: async (args) => {
+        const rig = RigConfig.by_key(String(args.rig_id))
+        if (rig === undefined) { throw new Error(`Unknown rig: ${String(args.rig_id)}. Use list_rigs.`) }
+        choose('#skeleton-type-select', rig.skeleton_type)
+        await wait_until(() => this.step_bone_mapping.has_source_skeleton(), 'the rig to load')
+        return mapping_state()
+      },
+
+      retarget_load_model: async (args) => {
+        put_file('#upload-file', await file_from_args(args))
+        await wait_until(() => this.step_bone_mapping.has_target_skeleton(), 'the model to load (check it is a rigged GLB/FBX/ZIP)', 60_000)
+        return mapping_state()
+      },
+
+      retarget_map_bones: (args) => {
+        if (args.clear === true) { this.step_bone_mapping.clear_all_bone_mappings() } else { this.step_bone_mapping.auto_map_bones() }
+        return mapping_state()
+      },
+
+      retarget_continue: async (args) => {
+        click(args.back === true ? '#back_to_bone_map_button' : '#continue-to-listing-button')
+        return { step: args.back === true ? 'bone-mapping' : 'animations' }
+      },
+
+      ...animation_list_handlers
+    }
   }
 
   public add_event_listeners (): void {

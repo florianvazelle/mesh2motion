@@ -16,6 +16,8 @@ import { ComposerPreview } from './ComposerPreview.ts'
 import { ComposerLibraryList } from './ComposerLibraryList.ts'
 import { ComposerSlots, type ComposerSlotName, type SlotAnimationDroppedDetail } from './ComposerSlots.ts'
 import { ComposerExport } from './ComposerExport.ts'
+import { AppBridge } from '../lib/bridge/AppBridge.ts'
+import { file_from_args, put_file, wait_until } from '../lib/bridge/BridgeDom.ts'
 
 /**
  * Composer page: combines the upper half of one animation with the lower half
@@ -101,6 +103,38 @@ class ComposerModule {
     this.import_animations_button.set_enabled(false)
 
     this.add_event_listeners()
+    AppBridge.start('composer', this.bridge_handlers())
+  }
+
+  // tools for an AI assistant driving this page (see AppBridge)
+  private bridge_handlers (): Record<string, (args: Record<string, any>) => unknown> { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const slot_names = (): Record<ComposerSlotName, string | null> => ({
+      upper: this.animation_library.find(this.slot_animation_ids.upper ?? '')?.name ?? null,
+      lower: this.animation_library.find(this.slot_animation_ids.lower ?? '')?.name ?? null
+    })
+
+    return {
+      get_state: () => ({ page: 'composer', slots: slot_names(), remix: this.composed_clip?.name ?? null }),
+
+      composer_list_animations: (args) => {
+        const filter = String(args.filter ?? '').toLowerCase()
+        return this.animation_library.all().map(entry => entry.name).filter(name => name.toLowerCase().includes(filter))
+      },
+
+      composer_set_slot: async (args) => {
+        const wanted = String(args.animation).toLowerCase()
+        const entry = this.animation_library.all().find(e => e.name.toLowerCase() === wanted)
+        if (entry === undefined) { throw new Error(`Unknown animation: ${String(args.animation)}. Use composer_list_animations.`) }
+        await wait_until(() => this.upper_body_bone_names.size > 0, 'the model to load')
+        await this.set_slot_animation(args.slot as ComposerSlotName, entry.id)
+        return { slots: slot_names(), remix: this.composed_clip?.name ?? null }
+      },
+
+      import_animations: async (args) => {
+        put_file('#import-animations-input', await file_from_args(args))
+        return { imported: 'started; call composer_list_animations to see the result' }
+      }
+    }
   }
 
   public start (): void {

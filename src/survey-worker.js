@@ -20,8 +20,20 @@
  * survey submissions and animation requests for static/survey/index.html.
  *
  * GET /api/... is the public read-only API (rigs, model variations). See src/api/ApiRoutes.ts.
+ *
+ * POST /mcp is an MCP server exposing the same API as tools. See src/api/McpRoutes.ts.
+ * POST /mcp/<code> adds tools that drive the browser tab showing <code>; the tab connects to GET /bridge/<code>
+ * (WebSocket). See src/api/BridgeSession.ts.
  */
 import { API_PREFIX, handleApiRequest } from "./api/ApiRoutes";
+import { MCP_PATH, handleMcpRequest } from "./api/McpRoutes";
+import { BridgeSession } from "./api/BridgeSession";
+
+export { BridgeSession };
+
+// a tab and its MCP client share a secret code (random, picked by the tab). Never accept short guessable ones.
+const BRIDGE_CODE = /^[A-Za-z0-9-]{16,64}$/;
+const BRIDGE_PATH = "/bridge/";
 
 export default {
   /**
@@ -58,7 +70,38 @@ export default {
       return corsResponse(body, status);
     }
 
-    // 6) Fallback for unknown routes/methods.
+    // 6) Browser tab connecting to its bridge session.
+    if (request.method === "GET" && url.pathname.startsWith(BRIDGE_PATH)) {
+      const session = bridgeSession(env, url.pathname.slice(BRIDGE_PATH.length));
+      return session === null ? corsResponse({ error: "Invalid code" }, 400) : session.fetch(new Request("https://bridge/socket", request));
+    }
+
+    // 7) MCP server: read-only API tools, plus browser tools when the path carries a tab code.
+    if (request.method === "POST" && (url.pathname === MCP_PATH || url.pathname.startsWith(MCP_PATH + "/"))) {
+      let message;
+      try {
+        message = await request.json();
+      } catch {
+        return corsResponse({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
+      }
+
+      let bridge;
+      if (url.pathname !== MCP_PATH) {
+        const session = bridgeSession(env, url.pathname.slice(MCP_PATH.length + 1));
+        if (session === null) {
+          return corsResponse({ error: "Invalid code" }, 400);
+        }
+        bridge = async (tool, args) => {
+          const reply = await (await session.fetch("https://bridge/call", { method: "POST", body: JSON.stringify({ tool, args }) })).json();
+          if (reply.error !== undefined) throw new Error(reply.error);
+          return reply.result;
+        };
+      }
+      const { body, status } = await handleMcpRequest(message, url.origin, bridge);
+      return corsResponse(body, status);
+    }
+
+    // 8) Fallback for unknown routes/methods.
     return corsResponse({ error: "Not found" }, 404);
   },
 };
@@ -299,12 +342,16 @@ function badRequest(message) {
 /**
  * Builds a JSON response with CORS headers used by this worker.
  */
+function bridgeSession(env, code) {
+  return BRIDGE_CODE.test(code) ? env.BRIDGE.get(env.BRIDGE.idFromName(code)) : null;
+}
+
 function corsResponse(body, status) {
   const headers = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",         // restrict to your domain in production
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Mcp-Protocol-Version",
   };
 
   return new Response(body ? JSON.stringify(body) : null, { status, headers });
